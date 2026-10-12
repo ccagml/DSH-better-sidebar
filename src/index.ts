@@ -109,8 +109,8 @@ export interface SidebarFsLevel {
   error?: string
 }
 
-/** Services required before mounting: the webserver routes, the session store, the web runtime's trusted hosts, and the tool registry. */
-export const inject = ['webServer', 'sessions', 'webRuntime', 'tools']
+/** Services required before mounting: the webserver routes, the session store, the web startup trust list (DSH ≥ 0.2.1), and the tool registry. */
+export const inject = ['webServer', 'sessions', 'webStartup', 'tools']
 
 /** Content types for the media route, by extension. */
 const MEDIA_TYPES: Record<string, string> = {
@@ -780,6 +780,38 @@ function buildApi(
       await git.discard(cwd, await resolveStatusPath(cwd, requireString(payload, 'path'), repoRoot), repoRoot)
       return { ok: true }
     },
+    'git.stash-list': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      return { stashes: await git.stashList(cwd, selectedRepoOf(payload)) }
+    },
+    'git.stash-push': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      const record = payload as { message?: unknown; paths?: unknown }
+      const message = typeof record.message === 'string' ? record.message : undefined
+      // Same shape as git.stage: the porcelain paths are repo-root-relative and
+      // go to git verbatim behind the `--` pathspec separator.
+      let paths: string | string[] | undefined
+      if (record.paths !== undefined) {
+        if (Array.isArray(record.paths)) {
+          paths = record.paths.filter((p): p is string => typeof p === 'string')
+        } else if (typeof record.paths === 'string') {
+          paths = [record.paths]
+        }
+      }
+      await git.stashPush(cwd, message, paths, selectedRepoOf(payload))
+      return { ok: true }
+    },
+    'git.stash-apply': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      const record = payload as { pop?: unknown }
+      await git.stashApply(cwd, requireString(payload, 'ref'), record.pop === true, selectedRepoOf(payload))
+      return { ok: true }
+    },
+    'git.stash-drop': async (payload) => {
+      const { cwd } = await gitCwdOf(payload)
+      await git.stashDrop(cwd, requireString(payload, 'ref'), selectedRepoOf(payload))
+      return { ok: true }
+    },
     'git.revert': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       await git.revert(cwd, requireString(payload, 'hash'), selectedRepoOf(payload))
@@ -1185,18 +1217,19 @@ async function importLegacyPrefs(
 
 /**
  * Plugin body: mount the fenced routes and the sidebar_open push socket.
- * @param ctx - host plugin context (webServer, sessions, webRuntime).
+ * @param ctx - host plugin context (webServer, sessions, webStartup).
  * @param config - deployment-provided limits; the Loader validates against
  * {@link Config} and fills defaults, direct callers get them from
  * {@link resolveSidebarConfig}.
  */
 export function apply(ctx: Context, config?: SidebarConfig): void {
   const resolved = resolveSidebarConfig(config)
-  // The web runtime's bind-derived trust list (boot-sampled LAN literals
-  // plus --trusted-host authorities) — the authoritative source the /api
-  // gateway fence derives its list from. Read per request from the live
-  // service value; a replaced list takes effect without a plugin restart.
-  const fence = (req: SidebarHttpRequest): boolean => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts)
+  // The web startup trust list (`--trusted-host` authorities; DSH ≥ 0.2.1
+  // replaced the webRuntime service with webStartup) — the authoritative
+  // source the /api gateway fence derives its list from. Read per request
+  // from the live service value; a replaced list takes effect without a
+  // plugin restart.
+  const fence = (req: SidebarHttpRequest): boolean => isTrustedApiRequest(req, ctx.webStartup.trustedHosts)
   // The model-facing open-request registry: queues `sidebar_open` requests
   // per session and pushes them to connected sidebar views over the
   // `/sidebar/ws/agent-opens` socket.

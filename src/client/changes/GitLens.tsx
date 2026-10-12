@@ -28,11 +28,11 @@
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import {
-  Button, IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular, IconPlusOutlineRegular,
-  IconSparkleRegular, IconTrashOutlineRegular, Menu, writeClipboard,
+  Button, IconArchiveOutlineRegular, IconChevronRightOutlineRegular, IconCodeOutlineRegular, IconCopyOutlineRegular,
+  IconPlusOutlineRegular, IconSparkleRegular, IconTrashOutlineRegular, Menu, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../../context-types.ts'
-import type { GitLineCounts, GitLogEntry, GitStatusEntry, GitStatusResult, GitWorktree, SessionScope } from '../api.ts'
+import type { GitLineCounts, GitLogEntry, GitStashEntry, GitStatusEntry, GitStatusResult, GitWorktree, SessionScope } from '../api.ts'
 import { api, SidebarApiError } from '../api.ts'
 import { builtinFileIcon, builtinFolderIcon } from '../file-icons.tsx'
 import { usePolling } from '../use-polling.ts'
@@ -154,6 +154,13 @@ function entriesKey(entries: readonly GitStatusEntry[]): string {
   return key
 }
 
+/** The stash list's identity (same entries, same order). The poll-side bail-out:
+ *  an unchanged list must not re-render the change tree, because a render
+ *  re-resolves every row's icon. */
+function stashesKey(entries: readonly GitStashEntry[]): string {
+  return entries.map(entry => `${entry.ref}\u0000${entry.hash}\u0000${entry.subject}`).join('\n')
+}
+
 /** The `+N` / `−M` pair, ink and sign included: shared by a file row and its
  *  group header so the two can never drift apart. A zero side is omitted (the
  *  diff pane's own convention), and both numbers stay on the element as
@@ -209,14 +216,28 @@ const FileRow = memo(function FileRow(props: {
   staged: boolean
   busy: boolean
   selected: boolean
+  /** Ticked for the next multi-file stash (the push takes these paths). */
+  stashSelected: boolean
   onPreview: (node: ChangeFile, staged: boolean) => void
   onContextMenu: (event: MouseEvent, node: ChangeFile, staged: boolean) => void
   onToggleStage: (path: string, staged: boolean) => void
+  onToggleStash: (path: string) => void
 }): ReactNode {
   const { row: node, staged, busy, selected } = props
   const action = staged ? t('unstage') : t('stage')
   return (
     <div className={css.row} data-row={node.path} data-selected={selected ? 'true' : undefined}>
+      {/* The stash tick lives OUTSIDE the row's main button, so ticking never
+          previews the file (the row click stays the preview). */}
+      <input
+        type="checkbox"
+        className={css.stashCheckbox}
+        checked={props.stashSelected}
+        disabled={busy}
+        aria-label={t('stashFile')}
+        title={t('stashFile')}
+        onChange={() => { props.onToggleStash(node.path) }}
+      />
       <button
         type="button"
         className={css.rowMain}
@@ -383,6 +404,14 @@ export function GitLens(props: GitLensProps) {
 
   /** The open file-row context menu (cursor position for the portaled Menu). */
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
+  /** The stash list of the selected checkout (loaded with the panel's refresh). */
+  const [stashes, setStashes] = useState<GitStashEntry[]>([])
+  /** Draft message for the next stash push (empty = git's default WIP text). */
+  const [stashMsg, setStashMsg] = useState('')
+  /** Files ticked for the next multi-file stash (repo-root-relative paths). */
+  const [stashSelectedPaths, setStashSelectedPaths] = useState<string[]>([])
+  /** The open stash-row context menu. */
+  const [stashMenu, setStashMenu] = useState<{ entry: GitStashEntry; x: number; y: number } | null>(null)
   /** The open history-row context menu. */
   const [historyMenu, setHistoryMenu] = useState<{ entry: GitLogEntry; x: number; y: number } | null>(null)
   /** The pending destructive action awaiting confirmation. */
@@ -658,6 +687,81 @@ export function GitLens(props: GitLensProps) {
     )
   }
 
+  const stashError = (reason: unknown): string => `${t('stashError')}: ${errorMessage(reason)}`
+
+  /** The stash list of the selected checkout. A failure reads as "no stashes":
+   *  the section is advisory, the panel's hard failure states describe the repo.
+   *  An UNCHANGED list keeps its identity — a state write would re-render the
+   *  change tree and re-resolve every row's icon (`git-view-worktree.spec.tsx`
+   *  pins that an unchanged status poll resolves nothing). */
+  const loadStashes = useCallback(async (signal?: AbortSignal): Promise<void> => {
+    try {
+      const { stashes: list } = await api.gitStashList(gitScopeNow(), selectedWorktree, signal)
+      setStashes(prev => stashesKey(prev) === stashesKey(list) ? prev : list)
+    } catch {
+      setStashes(prev => prev.length === 0 ? prev : [])
+    }
+  }, [gitScopeNow, selectedWorktree])
+
+  useEffect(() => {
+    if (!visible) return
+    const controller = new AbortController()
+    void loadStashes(controller.signal)
+    return () => { controller.abort() }
+  }, [visible, loadStashes, refreshTick])
+
+  /** Tick / untick one file for the next multi-file stash. Stable identity: the
+   *  row is memoized, so a fresh callback per render would re-resolve its icon. */
+  const toggleStashSelection = useCallback((path: string): void => {
+    setStashSelectedPaths(prev => prev.includes(path)
+      ? prev.filter(p => p !== path)
+      : [...prev, path])
+  }, [])
+
+  /** Push onto the stash. Explicitly ticked files win; a `path` (the file row's
+   *  menu) beats the repo-wide push; otherwise the whole worktree + index goes in. */
+  const stashPush = (path?: string): void => {
+    if (busy) return
+    const paths = stashSelectedPaths.length > 0 ? stashSelectedPaths : (path !== undefined ? [path] : undefined)
+    if (paths === undefined && stagedEntries.length === 0 && unstagedEntries.length === 0) return
+    const message = stashMsg.trim() === '' ? undefined : stashMsg.trim()
+    void runAction(async () => {
+      await api.gitStashPush(gitScopeNow(), message, selectedWorktree, paths)
+      setStashMsg('')
+      setStashSelectedPaths([])
+      await loadStashes()
+    }, stashError)
+  }
+
+  /** Apply (or pop) one stash entry. Pop drops it only on success, so a conflict
+   *  keeps the stash for a retry. */
+  const stashApply = (entry: GitStashEntry, pop: boolean): void => {
+    if (busy) return
+    void runAction(async () => {
+      await api.gitStashApply(gitScopeNow(), entry.ref, pop, selectedWorktree)
+      await loadStashes()
+    }, stashError)
+  }
+
+  /** Drop one stash entry permanently (confirm-gated like discard). */
+  const stashDrop = (entry: GitStashEntry): void => {
+    runConfirmed({
+      title: t('stashDropTitle'),
+      description: t('stashDropDesc', { subject: entry.subject }),
+      confirmLabel: t('stashDrop'),
+      onConfirm: () => runAction(async () => {
+        await api.gitStashDrop(gitScopeNow(), entry.ref, selectedWorktree)
+        await loadStashes()
+      }, stashError),
+    })
+  }
+
+  const openStashMenu = (event: MouseEvent, entry: GitStashEntry): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    setStashMenu({ entry, x: event.clientX, y: event.clientY })
+  }
+
   const commit = (): void => {
     const message = commitMsg.trim()
     if (message === '' || busy || suggesting) return
@@ -893,6 +997,8 @@ export function GitLens(props: GitLensProps) {
       onPreview={previewFile}
       onContextMenu={openRowMenu}
       onToggleStage={stagePath}
+      stashSelected={stashSelectedPaths.includes(node.path)}
+      onToggleStash={toggleStashSelection}
     />
   )
 
@@ -1044,6 +1150,63 @@ export function GitLens(props: GitLensProps) {
           </>
         )}
 
+        {/* The stash shelf: the message box + the push button + the entries. It
+            rides the panel's ONE scroll body, so a long stash list scrolls with
+            the change groups instead of pushing the commit bar off-screen. */}
+        {isRepo && (
+          <div className={css.stashSection} data-stash-section>
+            <SectionHeader
+              className={css.stashHeader}
+              label={`${t('stash')} (${stashes.length})`}
+              action={stashSelectedPaths.length > 0
+                ? <span className={css.stashCount}>{t('stashSelectedCount', { count: stashSelectedPaths.length })}</span>
+                : undefined}
+            />
+            <div className={css.stashInputRow}>
+              <input
+                type="text"
+                className={css.stashInput}
+                placeholder={t('stashPlaceholder')}
+                value={stashMsg}
+                disabled={busy}
+                aria-label={t('stashPlaceholder')}
+                onChange={(event) => { setStashMsg(event.currentTarget.value) }}
+              />
+              <button
+                type="button"
+                className={css.stashButton}
+                disabled={busy || (stagedEntries.length === 0 && unstagedEntries.length === 0 && stashSelectedPaths.length === 0)}
+                onClick={() => { stashPush() }}
+              >
+                {t('stashPush')}
+              </button>
+            </div>
+            {stashes.length === 0 && <div className={css.stashEmpty}>{t('stashEmpty')}</div>}
+            {stashes.map((entry, index) => (
+              <div key={entry.ref} className={css.stashRow}>
+                <button
+                  type="button"
+                  className={css.stashRowMain}
+                  title={entry.subject}
+                  onClick={() => { stashApply(entry, true) }}
+                  onContextMenu={(event) => { openStashMenu(event, entry) }}
+                >
+                  <span className={css.stashBadge}>{index}</span>
+                  <span className={css.stashName}>{entry.subject}</span>
+                </button>
+                <IconButton
+                  size="sm"
+                  className={css.rowAction}
+                  disabled={busy}
+                  label={t('stashDrop')}
+                  icon={<IconTrashOutlineRegular size={14} />}
+                  onClick={() => { stashDrop(entry) }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
         {isRepo && (
           <>
             <SectionHeader label={t('history')} count={logEntries.length > 0 ? logEntries.length : undefined} />
@@ -1165,6 +1328,38 @@ export function GitLens(props: GitLensProps) {
         </div>
       )}
 
+      {/* The stash-row context menu (apply / pop / drop), at the right-click
+          cursor. Left-click on a row pops it, so these are the alternatives. */}
+      <Menu
+        open={stashMenu !== null}
+        onClose={() => { setStashMenu(null) }}
+        items={[
+          { id: 'apply', label: t('stashApply') },
+          { id: 'pop', label: t('stashPop') },
+          { type: 'separator', id: 'sepStash' },
+          { id: 'drop', label: t('stashDrop'), danger: true },
+        ]}
+        onSelect={(id) => {
+          const target = stashMenu
+          if (target === null) return
+          setStashMenu(null)
+          if (id === 'apply') {
+            stashApply(target.entry, false)
+            return
+          }
+          if (id === 'drop') {
+            stashDrop(target.entry)
+            return
+          }
+          if (id === 'pop') stashApply(target.entry, true)
+        }}
+        portal
+        compact
+        align="start"
+        getAnchorRect={() => (stashMenu === null ? null : new DOMRect(stashMenu.x, stashMenu.y, 0, 0))}
+        anchor={<span />}
+      />
+
       {/*
         The one shared file-row context menu, positioned at the right-click
         cursor (portal so the panel's overflow clip cannot crop it).
@@ -1185,6 +1380,9 @@ export function GitLens(props: GitLensProps) {
           ...(fileMenu !== null && !fileMenu.untracked
             ? [{ id: 'discard', label: t('discard'), icon: <IconTrashOutlineRegular size={14} />, danger: true }]
             : []),
+          ...(fileMenu !== null
+            ? [{ id: 'stashFile', label: t('stashFile'), icon: <IconArchiveOutlineRegular size={14} /> }]
+            : []),
           { type: 'separator', id: 'sep1' },
           { id: 'relative', label: t('copyRelative'), icon: <IconCopyOutlineRegular size={14} /> },
           { id: 'absolute', label: t('copyAbsolute'), icon: <IconCopyOutlineRegular size={14} /> },
@@ -1202,6 +1400,10 @@ export function GitLens(props: GitLensProps) {
           }
           if (id === 'stage') {
             stageEntry(target.path, target.staged)
+            return
+          }
+          if (id === 'stashFile') {
+            stashPush(target.path)
             return
           }
           if (id === 'discard') {

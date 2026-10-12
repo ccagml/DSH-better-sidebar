@@ -753,3 +753,67 @@ export async function push(cwd: string, selected?: string): Promise<void> {
 export async function pull(cwd: string, selected?: string): Promise<void> {
   await runGit(await repoRoot(cwd, selected), ['pull', '--ff-only'])
 }
+
+/** One entry of `git stash list`: the reflog-style name (`stash@{0}`), the short
+ *  hash, and the subject line (the "WIP on <branch>: ..." message git writes,
+ *  or a custom message when the stash was created with one). */
+export interface GitStashEntry {
+  /** Reflog selector usable as a command argument (`stash@{0}`). */
+  ref: string
+  /** Short commit hash of the stash commit. */
+  hash: string
+  /** Stash message: git's auto "WIP on ..." or the user-supplied text. */
+  subject: string
+}
+
+/** Parse `git stash list --format=%gd%x1f%h%x1f%s` rows (unit separators, newest first). */
+export function parseStashLines(output: string): GitStashEntry[] {
+  const rows: GitStashEntry[] = []
+  for (const line of output.split('\n')) {
+    if (line === '') continue
+    const [ref, hash, subject] = line.split('\x1f')
+    if (ref === undefined || !/^stash@\{\d+\}$/.test(ref)) continue
+    rows.push({ ref, hash: hash ?? '', subject: subject ?? '' })
+  }
+  return rows
+}
+
+/** The stash list, newest first. */
+export async function stashList(cwd: string, selected?: string): Promise<GitStashEntry[]> {
+  const raw = await runGit(await repoRoot(cwd, selected), [
+    'stash', 'list', '--format=%gd%x1f%h%x1f%s',
+  ])
+  return parseStashLines(raw)
+}
+
+/** Push the worktree + index state onto the stash (keep-index stays off). An empty
+ *  message uses git's default "WIP on <branch>" wording. A repo-wide push leaves
+ *  untracked files alone (`-u` would sweep build artifacts into the stash silently).
+ *  A `paths` push is scoped to the given files and DOES include them when untracked
+ *  (`-u`), because a per-file stash that silently skips an untracked file reads as a
+ *  no-op to the user. */
+export async function stashPush(cwd: string, message: string | undefined, paths: string | string[] | undefined, selected?: string): Promise<void> {
+  const root = await repoRoot(cwd, selected)
+  const text = message !== undefined && message.trim() !== '' ? message : 'sidebar stash'
+  const args = ['stash', 'push', '-m', text]
+  if (paths !== undefined) {
+    const pathList = Array.isArray(paths) ? paths : [paths]
+    if (pathList.length > 0) {
+      args.push('-u', '--', ...pathList)
+    }
+  }
+  await runGit(root, args)
+}
+
+/** Apply (default) or pop one stash entry. Pop drops it only when the apply succeeded,
+ *  so a conflict leaves the stash intact for a retry. */
+export async function stashApply(cwd: string, ref: string, pop: boolean, selected?: string): Promise<void> {
+  if (!/^stash@\{\d+\}$/.test(ref)) throw new GitCommandError(`invalid stash ref: ${ref}`, 'bad-request', 'apply')
+  await runGit(await repoRoot(cwd, selected), pop ? ['stash', 'pop', ref] : ['stash', 'apply', ref])
+}
+
+/** Drop one stash entry permanently. */
+export async function stashDrop(cwd: string, ref: string, selected?: string): Promise<void> {
+  if (!/^stash@\{\d+\}$/.test(ref)) throw new GitCommandError(`invalid stash ref: ${ref}`, 'bad-request', 'drop')
+  await runGit(await repoRoot(cwd, selected), ['stash', 'drop', ref])
+}

@@ -89,6 +89,16 @@ export interface GitWorktree {
   changes: number
 }
 
+/** One entry of the stash list (newest first). */
+export interface GitStashEntry {
+  /** Reflog selector usable as a command argument (`stash@{0}`). */
+  ref: string
+  /** Short commit hash of the stash commit. */
+  hash: string
+  /** Stash message: git's auto "WIP on ..." or the user-supplied text. */
+  subject: string
+}
+
 /** One model a provider advertises (the pinned commit-message dropdown). */
 export interface GitModelInfo {
   /** Provider-side model id (dispatched verbatim). */
@@ -424,6 +434,22 @@ export const api = {
    *  fails loudly rather than opening a merge editor nobody can answer). */
   gitPull: (scope: SessionScope, worktree?: string) =>
     call<{ ok: true }>('git.pull', gitPayload(scope, worktree, {})),
+  /** The stash list for the selected repo (newest first). */
+  gitStashList: (scope: SessionScope, worktree?: string, signal?: AbortSignal) =>
+    call<{ stashes: GitStashEntry[] }>('git.stash-list', gitPayload(scope, worktree, {}), signal),
+  /** Stash the worktree + index state (custom message optional; untracked files
+   *  stay). With `paths`, only those files are stashed (untracked included). */
+  gitStashPush: (scope: SessionScope, message: string | undefined, worktree?: string, paths?: string | string[]) =>
+    call<{ ok: true }>('git.stash-push', gitPayload(scope, worktree, {
+      ...(message !== undefined && message.trim() !== '' ? { message } : {}),
+      ...(paths !== undefined ? { paths } : {}),
+    })),
+  /** Apply (or pop) one stash entry. Pop drops it only when apply succeeded. */
+  gitStashApply: (scope: SessionScope, ref: string, pop: boolean, worktree?: string) =>
+    call<{ ok: true }>('git.stash-apply', gitPayload(scope, worktree, { ref, pop })),
+  /** Drop one stash entry permanently. */
+  gitStashDrop: (scope: SessionScope, ref: string, worktree?: string) =>
+    call<{ ok: true }>('git.stash-drop', gitPayload(scope, worktree, { ref })),
   /** Ask the host to generate a commit message from the pending changes: it
    *  streams the diff through the harness LLM on the pinned route (or the
    *  conversation's own) and answers with the route actually used.

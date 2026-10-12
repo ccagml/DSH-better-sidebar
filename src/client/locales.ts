@@ -590,6 +590,18 @@ export const zh = {
   pluginTurnOutlineName: 'dsh-turn-outline 轮次轨迹',
   pluginTurnOutlineDesc: '把会话按用户轮次折叠成「输入 + 工具步骤 + 输出」摘要，点击任意步骤一键跳回对话原位；零 LLM 调用、只读',
   pluginDshMemoryDeltaName: 'dsh-memory-delta 记忆',
+  stash: '贮藏',
+  stashPlaceholder: '贮藏信息（可选）',
+  stashPush: '贮藏',
+  stashFile: '贮藏此文件',
+  stashSelectedCount: '已选 {count} 个文件',
+  stashEmpty: '没有贮藏',
+  stashApply: '恢复此贮藏',
+  stashPop: '弹出此贮藏（应用后删除）',
+  stashDrop: '删除此贮藏',
+  stashDropTitle: '删除贮藏',
+  stashDropDesc: '将永久删除贮藏「{subject}」（不可恢复）。',
+  stashError: '贮藏操作失败',
 }
 
 /** The en dictionary (key-set-equal to zh, enforced by the type annotation). */
@@ -1161,6 +1173,18 @@ export const en: Record<keyof typeof zh, string> = {
   pluginTurnOutlineName: 'dsh-turn-outline Turn Outline',
   pluginTurnOutlineDesc: 'Fold the session into user turns (input + tool steps + output) and click any step to jump back to its exact spot in the conversation — no LLM calls, read-only',
   pluginDshMemoryDeltaName: 'dsh-memory-delta Memory',
+  stash: 'Stashes',
+  stashPlaceholder: 'Stash message (optional)',
+  stashPush: 'Stash',
+  stashFile: 'Stash this file',
+  stashSelectedCount: '{count} file(s) selected for stash',
+  stashEmpty: 'No stashes',
+  stashApply: 'Apply this stash',
+  stashPop: 'Pop this stash (apply and drop)',
+  stashDrop: 'Drop this stash',
+  stashDropTitle: 'Drop stash',
+  stashDropDesc: 'This permanently drops the stash "{subject}" (not recoverable).',
+  stashError: 'Stash operation failed',
 }
 
 /**

@@ -612,3 +612,111 @@
 @media (prefers-reduced-motion: reduce) {
   .row { animation: none; }
 }
+
+/* ── The stash shelf (the fork's 贮藏 feature) ────────────────────────────── */
+
+.stashSection {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 2px 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.stashHeader { margin: 0 2px; }
+
+.stashCount {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stashInputRow { display: flex; align-items: center; gap: 6px; padding: 2px; }
+
+.stashInput {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 3px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-s-13);
+}
+
+.stashButton {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-s-13);
+  cursor: pointer;
+}
+
+.stashButton:disabled { opacity: 0.5; cursor: default; }
+
+.stashEmpty {
+  padding: 3px 4px;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-s-13);
+}
+
+.stashRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.stashRowMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: var(--dsw-font-s-13);
+  text-align: left;
+  cursor: pointer;
+}
+
+.stashBadge {
+  flex: none;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-strong-11);
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.stashName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+}
+
+.stashCheckbox { flex: none; margin: 0 2px 0 0; cursor: pointer; }
