@@ -322,7 +322,7 @@ describe('ChangesTab', () => {
     }
   })
 
-  it('reports a failed stage action in the commit bar and catches it (no unhandled rejection)', async () => {
+  it('reports a failed stage action in the stash shelf and catches it (no unhandled rejection)', async () => {
     mockGit([{ path: 'src/a.ts', xy: ' M' }])
     vi.spyOn(api, 'gitStage').mockRejectedValue(new Error('index.lock exists'))
 
@@ -341,10 +341,70 @@ describe('ChangesTab', () => {
       const alert = [...container.querySelectorAll<HTMLElement>('[role="alert"]')]
         .find(node => (node.textContent ?? '').includes(t('changesStageFailed', { message: 'index.lock exists' })))
       expect(alert).toBeDefined()
-      // The ONE status line sits in the commit bar, directly under its input row.
-      const input = container.querySelector(`textarea[placeholder="${t('commitPlaceholder')}"]`)
-      expect(input).not.toBeNull()
-      expect(alert!.previousElementSibling?.contains(input)).toBe(true)
+      // The ONE status line sits in the stash shelf — the visible footer that
+      // replaced the hidden commit bar — directly above the stash header.
+      const shelf = container.querySelector<HTMLElement>('[data-stash-section]')
+      expect(shelf).not.toBeNull()
+      expect(shelf!.contains(alert!)).toBe(true)
+      expect(alert!.previousElementSibling).toBeNull()
+    } finally {
+      act(() => { root.unmount() })
+      container.remove()
+    }
+  })
+
+  it('stamps every stash with the time it was taken, and applies on click instead of popping', async () => {
+    mockGit([{ path: 'src/a.ts', xy: ' M' }])
+    const subject = 'On main: [2026-11-11 09:30] 早上的改动'
+    vi.spyOn(api, 'gitStashList').mockResolvedValue({ stashes: [{ ref: 'stash@{0}', hash: 'abc1234', subject }] })
+    const push = vi.spyOn(api, 'gitStashPush').mockResolvedValue({ ok: true })
+    const apply = vi.spyOn(api, 'gitStashApply').mockResolvedValue({ ok: true })
+
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root: Root = createRoot(container)
+    try {
+      mount(root)
+      await flushEffects()
+
+      const shelf = container.querySelector<HTMLElement>('[data-stash-section]')
+      expect(shelf).not.toBeNull()
+
+      // The row LEADS with the auto stamp and the readable label; the raw
+      // subject (branch prefix included) stays on the tooltip.
+      const rowOf = (): HTMLButtonElement | null =>
+        shelf!.querySelector<HTMLButtonElement>(`button[title="${subject}"]`)
+      const row = rowOf()
+      expect(row).not.toBeNull()
+      // The stamp renders as its own badge (brackets stripped), ahead of the
+      // readable label.
+      expect(row!.textContent).toContain('2026-11-11 09:30')
+      expect(row!.textContent).toContain('早上的改动')
+
+      // A push always carries a FRESH stamp, with the typed text after it —
+      // an empty box still produces a stamped message, never git's default.
+      const input = shelf!.querySelector('input')!
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+        setter.call(input, '晚上的改动')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      const stashButton = [...shelf!.querySelectorAll<HTMLButtonElement>('button')]
+        .find(button => button.textContent === t('stashPush'))
+      expect(stashButton).toBeDefined()
+      await act(async () => { stashButton!.click() })
+      await flushEffects()
+
+      expect(push).toHaveBeenCalledTimes(1)
+      expect(push.mock.calls[0]?.[1]).toMatch(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] 晚上的改动$/)
+
+      // Left-click APPLIES (pop = false): the record stays in the list —
+      // retiring it is the context menu's deliberate pop/drop choice.
+      await act(async () => { rowOf()!.click() })
+      await flushEffects()
+      expect(apply).toHaveBeenCalledTimes(1)
+      expect(apply.mock.calls[0]?.[1]).toBe('stash@{0}')
+      expect(apply.mock.calls[0]?.[2]).toBe(false)
     } finally {
       act(() => { root.unmount() })
       container.remove()
@@ -548,6 +608,15 @@ describe('ChangesTab', () => {
       expect(scroller!.contains(input!)).toBe(false)
       expect(bar!.contains(input!)).toBe(true)
       expect(scroller!.compareDocumentPosition(bar!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+      // The stash shelf is the OTHER fixed surface: it is the frame's child and
+      // must never ride the scroll body either (the fork's 贮藏 footer — the
+      // commit bar is hidden, this is what stays on screen at the bottom).
+      const shelf = container.querySelector<HTMLElement>('[data-stash-section]')
+      expect(shelf).not.toBeNull()
+      expect(shelf!.parentElement).toBe(frame)
+      expect(scroller!.contains(shelf!)).toBe(false)
+      expect(scroller!.compareDocumentPosition(shelf!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     } finally {
       act(() => { root.unmount() })
       container.remove()
@@ -572,10 +641,16 @@ describe('ChangesTab', () => {
     expect(rule('.gitScroll')).toContain('overflow-x: hidden')
     expect(rule('.gitScroll')).toContain('flex: 1')
     // The commit bar is now a plain flex sibling — no sticky bottom, no
-    // stacking order over the (still sticky) group headers.
+    // stacking order over the (still sticky) group headers. The fork HIDES it
+    // (the stash shelf owns the footer); that single line is the switch.
     expect(rule('.commitBar')).not.toContain('position')
     expect(rule('.commitBar')).not.toContain('sticky')
     expect(rule('.commitBar')).not.toContain('z-index')
+    expect(rule('.commitBar')).toContain('display: none')
+    // The stash shelf is the visible footer: docked under the list, with its
+    // own bounded scroll for a long stash list.
+    expect(rule('.stashSection')).toContain('border-top')
+    expect(rule('.stashList')).toContain('overflow-y: auto')
     // The group headers still park on the inner body's top edge.
     const groupHeader = rule('.group .groupHeader')
     expect(groupHeader).toContain('position: sticky')

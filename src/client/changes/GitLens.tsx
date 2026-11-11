@@ -161,6 +161,34 @@ function stashesKey(entries: readonly GitStashEntry[]): string {
   return entries.map(entry => `${entry.ref}\u0000${entry.hash}\u0000${entry.subject}`).join('\n')
 }
 
+/** The auto stamp every stash push of this fork carries, in LOCAL time:
+ *  `[YYYY-MM-DD HH:MM]`. git's own subject only quotes the date of the last
+ *  COMMIT (`WIP on <branch>: <commit …>`), so without this a stash row never
+ *  says when it was actually taken. */
+function stashStamp(): string {
+  const now = new Date()
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `[${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}]`
+}
+
+/** The bracketed auto stamp, as it appears inside a stash subject. */
+const STASH_STAMP_RE = /\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]/
+
+/** Split a stash subject into the auto stamp and a readable label, so the row
+ *  can put the TIME up front instead of burying it inside `On <branch>: …`.
+ *  A stash created outside this fork (or before it) has no stamp and renders
+ *  verbatim — the raw subject always stays on the row's tooltip. */
+function splitStashSubject(subject: string): { stamp?: string; label: string } {
+  const match = STASH_STAMP_RE.exec(subject)
+  if (match === null) return { label: subject }
+  const label = subject
+    .replace(match[0], '')
+    .replace(/^(?:WIP on|On) [^:]+: /, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  return { stamp: match[1], label }
+}
+
 /** The `+N` / `−M` pair, ink and sign included: shared by a file row and its
  *  group header so the two can never drift apart. A zero side is omitted (the
  *  diff pane's own convention), and both numbers stay on the element as
@@ -719,12 +747,15 @@ export function GitLens(props: GitLensProps) {
   }, [])
 
   /** Push onto the stash. Explicitly ticked files win; a `path` (the file row's
-   *  menu) beats the repo-wide push; otherwise the whole worktree + index goes in. */
+   *  menu) beats the repo-wide push; otherwise the whole worktree + index goes in.
+   *  The message ALWAYS starts with the auto stamp (even when the box is empty),
+   *  so the row says when the stash was taken. */
   const stashPush = (path?: string): void => {
     if (busy) return
     const paths = stashSelectedPaths.length > 0 ? stashSelectedPaths : (path !== undefined ? [path] : undefined)
     if (paths === undefined && stagedEntries.length === 0 && unstagedEntries.length === 0) return
-    const message = stashMsg.trim() === '' ? undefined : stashMsg.trim()
+    const text = stashMsg.trim()
+    const message = text === '' ? stashStamp() : `${stashStamp()} ${text}`
     void runAction(async () => {
       await api.gitStashPush(gitScopeNow(), message, selectedWorktree, paths)
       setStashMsg('')
@@ -733,8 +764,11 @@ export function GitLens(props: GitLensProps) {
     }, stashError)
   }
 
-  /** Apply (or pop) one stash entry. Pop drops it only on success, so a conflict
-   *  keeps the stash for a retry. */
+  /** Apply one stash entry — the LEFT-CLICK action. It does NOT drop the
+   *  record: recovering the changes and retiring the stash are separate
+   *  intents, so the pop lives only in the row's context menu (`stashPop`),
+   *  where it can be chosen deliberately. Pop still drops it only on success,
+   *  so a conflict keeps the stash for a retry. */
   const stashApply = (entry: GitStashEntry, pop: boolean): void => {
     if (busy) return
     void runAction(async () => {
@@ -1150,63 +1184,6 @@ export function GitLens(props: GitLensProps) {
           </>
         )}
 
-        {/* The stash shelf: the message box + the push button + the entries. It
-            rides the panel's ONE scroll body, so a long stash list scrolls with
-            the change groups instead of pushing the commit bar off-screen. */}
-        {isRepo && (
-          <div className={css.stashSection} data-stash-section>
-            <SectionHeader
-              className={css.stashHeader}
-              label={`${t('stash')} (${stashes.length})`}
-              action={stashSelectedPaths.length > 0
-                ? <span className={css.stashCount}>{t('stashSelectedCount', { count: stashSelectedPaths.length })}</span>
-                : undefined}
-            />
-            <div className={css.stashInputRow}>
-              <input
-                type="text"
-                className={css.stashInput}
-                placeholder={t('stashPlaceholder')}
-                value={stashMsg}
-                disabled={busy}
-                aria-label={t('stashPlaceholder')}
-                onChange={(event) => { setStashMsg(event.currentTarget.value) }}
-              />
-              <button
-                type="button"
-                className={css.stashButton}
-                disabled={busy || (stagedEntries.length === 0 && unstagedEntries.length === 0 && stashSelectedPaths.length === 0)}
-                onClick={() => { stashPush() }}
-              >
-                {t('stashPush')}
-              </button>
-            </div>
-            {stashes.length === 0 && <div className={css.stashEmpty}>{t('stashEmpty')}</div>}
-            {stashes.map((entry, index) => (
-              <div key={entry.ref} className={css.stashRow}>
-                <button
-                  type="button"
-                  className={css.stashRowMain}
-                  title={entry.subject}
-                  onClick={() => { stashApply(entry, true) }}
-                  onContextMenu={(event) => { openStashMenu(event, entry) }}
-                >
-                  <span className={css.stashBadge}>{index}</span>
-                  <span className={css.stashName}>{entry.subject}</span>
-                </button>
-                <IconButton
-                  size="sm"
-                  className={css.rowAction}
-                  disabled={busy}
-                  label={t('stashDrop')}
-                  icon={<IconTrashOutlineRegular size={14} />}
-                  onClick={() => { stashDrop(entry) }}
-                />
-              </div>
-            ))}
-          </div>
-        )}
-
         {isRepo && (
           <>
             <SectionHeader label={t('history')} count={logEntries.length > 0 ? logEntries.length : undefined} />
@@ -1255,9 +1232,85 @@ export function GitLens(props: GitLensProps) {
         )}
       </div>
 
-      {/* The commit bar is OUTSIDE the scroll body: it is the tab's persistent
-          action surface, so the message being written never scrolls away
-          (#194). */}
+      {/* The stash shelf is the tab's PERSISTENT footer: it is a sibling of
+          `.gitScroll`, never its content, so the stash (贮藏) list stays on
+          screen while the change groups and the history scroll past it (the
+          shelf used to ride the scroll body and scroll away). It also carries
+          the lens' ONE action status line now that the commit bar below is
+          hidden. */}
+      {isRepo && (
+        <div className={css.stashSection} data-stash-section>
+          {/* The ONE status line (commit / stage / discard / stash / push), so
+              every failure reads from the same place the actions live in. */}
+          {actionError !== null && <Notice kind="error" tone="inline" role="alert">{actionError}</Notice>}
+          <SectionHeader
+            className={css.stashHeader}
+            label={`${t('stash')} (${stashes.length})`}
+            action={stashSelectedPaths.length > 0
+              ? <span className={css.stashCount}>{t('stashSelectedCount', { count: stashSelectedPaths.length })}</span>
+              : undefined}
+          />
+          <div className={css.stashInputRow}>
+            <input
+              type="text"
+              className={css.stashInput}
+              placeholder={t('stashPlaceholder')}
+              value={stashMsg}
+              disabled={busy}
+              aria-label={t('stashPlaceholder')}
+              onChange={(event) => { setStashMsg(event.currentTarget.value) }}
+            />
+            <button
+              type="button"
+              className={css.stashButton}
+              disabled={busy || (stagedEntries.length === 0 && unstagedEntries.length === 0 && stashSelectedPaths.length === 0)}
+              onClick={() => { stashPush() }}
+            >
+              {t('stashPush')}
+            </button>
+          </div>
+          {/* The entries get their own bounded scroll: a long stash list must
+              not eat the change list's room, while the header and the push row
+              stay pinned inside the footer. */}
+          <div className={css.stashList}>
+            {stashes.length === 0 && <div className={css.stashEmpty}>{t('stashEmpty')}</div>}
+            {stashes.map((entry, index) => {
+              const { stamp, label } = splitStashSubject(entry.subject)
+              return (
+                <div key={entry.ref} className={css.stashRow}>
+                  <button
+                    type="button"
+                    className={css.stashRowMain}
+                    title={entry.subject}
+                    // Left-click APPLIES and keeps the record; popping (which
+                    // deletes it) is a deliberate right-click menu choice.
+                    onClick={() => { stashApply(entry, false) }}
+                    onContextMenu={(event) => { openStashMenu(event, entry) }}
+                  >
+                    <span className={css.stashBadge}>{index}</span>
+                    {stamp !== undefined && <span className={css.stashTime}>{stamp}</span>}
+                    <span className={css.stashName}>{label}</span>
+                  </button>
+                  <IconButton
+                    size="sm"
+                    className={css.rowAction}
+                    disabled={busy}
+                    label={t('stashDrop')}
+                    icon={<IconTrashOutlineRegular size={14} />}
+                    onClick={() => { stashDrop(entry) }}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* The commit bar (message box + commit / push / pull) is HIDDEN in this
+          fork — the stash shelf above owns the footer. It stays mounted (draft,
+          shortcuts and the tests keep their anchor), and `.commitBar` in
+          changes.module.css is what hides it: delete that `display: none` to
+          bring the bar back (#194 docking still applies). */}
       {isRepo && (
         <div className={css.commitBar} data-commit-bar>
           <div className={css.commitRow}>
@@ -1320,11 +1373,9 @@ export function GitLens(props: GitLensProps) {
             <Button variant="ghost" size="sm" disabled={busy || suggesting} onClick={push}>{t('push')}</Button>
             <Button variant="ghost" size="sm" disabled={busy || suggesting} onClick={pull}>{t('pull')}</Button>
           </div>
-          {/* The bar's ONE status line stays directly under the message row it
-              belongs to (the placement `changes-tab.spec.tsx` pins), so it keeps
-              reading as "your commit/stage/push failed" rather than as a tab-level
-              banner. */}
-          {actionError !== null && <Notice kind="error" tone="inline" role="alert">{actionError}</Notice>}
+          {/* The status line moved to the stash shelf above (the visible
+              footer): the bar itself is hidden, so an error printed here would
+              never be seen. */}
         </div>
       )}
 

@@ -235,10 +235,16 @@
 /* Since #194 the bar is a SIBLING of `.gitScroll` in the lens root's column:
    it is always on screen, so it needs neither `position: sticky` nor a
    stacking order over the sticky group headers (they are inside the scroller,
-   which clips them). */
+   which clips them).
+
+   FORK: the bar is HIDDEN — the message box + commit / push / pull are not
+   wanted at the bottom, the stash shelf below owns that footer instead. The
+   markup stays mounted (draft state, keyboard shortcuts, and the specs that
+   anchor on `[data-commit-bar]` all keep working), so removing this one
+   `display: none` brings the bar back. */
 .commitBar {
   flex: none;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 4px;
   padding: 8px 12px;
@@ -613,15 +619,33 @@
   .row { animation: none; }
 }
 
-/* ── The stash shelf (the fork's 贮藏 feature) ────────────────────────────── */
+/* ── The stash shelf (the fork's 贮藏 feature): the persistent footer ──────── */
 
+/* Since the fork hid the commit bar, this shelf OWNS the lens footer: it is a
+   SIBLING of `.gitScroll` (not its content), docked under the list exactly
+   where the commit bar used to sit, so the贮藏 list never scrolls out of view
+   while the change groups and the history move under it. */
 .stashSection {
   flex: none;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 4px 2px 6px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-base);
+}
+
+/* The entries' bounded scroll: a long stash list yields room instead of
+   pushing the change list off the panel, while the header, the message input
+   and the push button stay pinned inside the footer. */
+.stashList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  max-height: 168px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .stashHeader { margin: 0 2px; }
@@ -717,6 +741,17 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--dsw-alias-label-primary);
+}
+
+/* The auto stamp every push carries (`[YYYY-MM-DD HH:MM]`, local time): it
+   sits ahead of the label so a row reads WHEN the stash was taken without
+   opening the tooltip. */
+.stashTime {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxxs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .stashCheckbox { flex: none; margin: 0 2px 0 0; cursor: pointer; }
